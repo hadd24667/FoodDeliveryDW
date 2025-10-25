@@ -107,3 +107,7 @@ CREATE TABLE dw.fact_app_events (
     amount DECIMAL(10,2),
     outcome VARCHAR(100)
 );
+
+CREATE INDEX IF NOT EXISTS ix_orders_time ON dw.fact_orders(order_placed_at);
+CREATE INDEX IF NOT EXISTS ix_orders_restaurant ON dw.fact_orders(restaurant_id);
+CREATE INDEX IF NOT EXISTS ix_orders_customer ON dw.fact_orders(customer_id);
