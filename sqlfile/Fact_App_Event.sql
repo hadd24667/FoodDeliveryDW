@@ -1,23 +1,20 @@
+DROP TABLE IF EXISTS public.fact_app_events CASCADE;
+DROP TABLE IF EXISTS public.dim_user CASCADE;
 
-CREATE TABLE Fact_App_Events (
-    UserID INTEGER,
-    SessionID INTEGER,
-    Timestamp TEXT,         
-    event_name TEXT,
-    ProductID TEXT,
-    Amount NUMERIC(18, 9),  
-    Outcome TEXT
+CREATE TABLE public.dim_user (
+    user_sk VARCHAR(50) PRIMARY KEY,
+    userid INTEGER NOT NULL
 );
 
+CREATE TABLE public.fact_app_events (
+    user_sk VARCHAR(50) REFERENCES dim_user(user_sk),
+    sessionid INTEGER,
+    timestamp VARCHAR(50),
+    event_name VARCHAR(100),
+    productid VARCHAR(100),
+    amount DECIMAL(10,2),
+    outcome VARCHAR(100)
+);
 
-
-COMMENT ON TABLE Fact_App_Events IS 'Bảng Fact lưu trữ các sự kiện ứng dụng từ clickstream';
-COMMENT ON COLUMN Fact_App_Events.event_name IS 'Tên sự kiện (được đổi tên từ EventType trong tệp CSV)';
-
-SELECT * FROM Fact_App_Events LIMIT 10;
-
-SELECT DISTINCT event_name FROM Fact_App_Events;
-
-SELECT COUNT(*) FROM fact_app_events;
-
-SELECT current_database();
+select * from dim_user;
+select * from fact_app_events;
