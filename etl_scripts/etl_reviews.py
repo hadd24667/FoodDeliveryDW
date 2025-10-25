@@ -1,69 +1,81 @@
 import pandas as pd
-import re
 from textblob import TextBlob
-import psycopg2
+from sqlalchemy import text
+from db_connection import get_engine
 
-# =========================
-# 1. EXTRACT - Đọc dữ liệu
-# =========================
-df = pd.read_csv("Reviews.csv", encoding='latin1')
+INPUT_FILE = "../source_data/Reviews.csv"
+SCHEMA_NAME = "dw"
 
-# =========================
-# 2. TRANSFORM - Làm sạch & Chuẩn hóa
-# =========================
+engine = get_engine()
 
-# Giữ lại cột cần thiết
-df = df[['UserId', 'Score', 'Time', 'Summary']]
-
-# Loại bỏ dòng trùng lặp
-df.drop_duplicates(inplace=True)
-
-# Loại bỏ dòng giá trị thiếu
-df.dropna(subset=['UserId', 'Score', 'Summary'], inplace=True)
-
-# Chuẩn hóa cột user_id
-df['user_id'] = 'REV_' + df['UserId'].astype(str)
-
-# Xóa cột UserId cũ
-df = df.drop(columns=['UserId'])
-
-# Tính điểm cảm xúc (sentiment)
-def get_sentiment(text):
+def get_sentiment(text_input):
     try:
-        return TextBlob(text).sentiment.polarity
+        return TextBlob(text_input).sentiment.polarity
     except:
         return 0
 
-df['sentiment_score'] = df['Summary'].astype(str).apply(get_sentiment)
+def main():
+    print("🚀 Starting ETL: Reviews Fact")
 
-# Đưa các cột về đúng thứ tự cần tải
-df = df[['user_id', 'Score', 'Time', 'Summary', 'sentiment_score']]
+    # Extract
+    try:
+        df = pd.read_csv(INPUT_FILE, encoding='latin1')
+        print(f"[EXTRACT] Loaded {len(df)} rows from {INPUT_FILE}")
+    except FileNotFoundError:
+        print(f"❌ File not found: {INPUT_FILE}")
+        return
+    except Exception as e:
+        print(f"❌ Error reading CSV: {e}")
+        return
 
-# =========================
-# 3. LOAD - Tải vào PostgreSQL
-# =========================
+    # Transform
+    df = df[['UserId', 'Score', 'Time', 'Summary']].drop_duplicates()
+    df.dropna(subset=['UserId', 'Score', 'Summary'], inplace=True)
+    df['reviewer_id'] = 'REV_' + df['UserId'].astype(str)   # 👈 Đổi user_id → reviewer_id
+    df['sentiment_score'] = df['Summary'].astype(str).apply(get_sentiment)
+    # Đổi tên cột sang lowercase cho khớp PostgreSQL
+    df = df.rename(columns={
+        'UserId': 'user_id',
+        'Score': 'score',
+        'Time': 'time',
+        'Summary': 'summary'
+    })
 
-# Thông tin kết nối DB (điền đúng thông số của bạn)
-conn = psycopg2.connect(
-    host="localhost",
-    database="postgres",
-    user="postgres",
-    password="soosdden2018",
-    port=5432
-)
+    df = df[['reviewer_id', 'score', 'time', 'summary', 'sentiment_score']]
 
-cur = conn.cursor()
 
-# Chèn từng dòng dữ liệu
-for index, row in df.iterrows():
-    cur.execute("""
-        INSERT INTO fact_reviews (user_id, score, time, summary, sentiment_score)
-        VALUES (%s, %s, %s, %s, %s)
-    """, (row['user_id'], row['Score'], row['Time'], row['Summary'], row['sentiment_score']))
+    df.to_csv("../staging_data/fact_reviews_preview.csv", index=False)
+    print("💾 Exported preview: staging_data/fact_reviews_preview.csv")
 
-# Xác nhận và đóng kết nối
-conn.commit()
-cur.close()
-conn.close()
 
-print("✅ ETL Completed Successfully")
+    # -> build dimension + DDL tối thiểu
+    dim_reviewer = df[['reviewer_id']].drop_duplicates()
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS dw.dim_reviewer (
+                reviewer_id VARCHAR(50) PRIMARY KEY
+                );
+                CREATE TABLE IF NOT EXISTS dw.fact_reviews (
+                reviewer_id VARCHAR(50) REFERENCES dw.dim_reviewer(reviewer_id),
+                score INT, time VARCHAR(50), summary TEXT, sentiment_score FLOAT
+                );
+            """))
+
+        # nạp dimension trước
+        with engine.begin() as conn:
+            conn.execute(text(f"TRUNCATE TABLE {SCHEMA_NAME}.fact_reviews CASCADE"))
+            conn.execute(text(f"TRUNCATE TABLE {SCHEMA_NAME}.dim_reviewer CASCADE"))
+        dim_reviewer.to_sql('dim_reviewer', engine, schema=SCHEMA_NAME, if_exists='append', index=False)
+
+        # nạp fact
+        df.to_sql('fact_reviews', engine, schema=SCHEMA_NAME, if_exists='append', index=False)
+        print(f"✅ Loaded {len(df)} rows into fact_reviews")
+    except Exception as e:
+        print(f"❌ Load error: {e}")
+
+    print("🎯 Reviews ETL completed.\n")
+
+if __name__ == "__main__":
+    main()
